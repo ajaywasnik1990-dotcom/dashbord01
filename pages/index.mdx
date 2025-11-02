@@ -1,20 +1,303 @@
----
-type: page
-title: About
-date: 2021-03-19
----
+"use client";
+import { useState } from "react";
 
-# Your Name
+export default function SheetViewer() {
+  const [mode, setMode] = useState("gsheet");
+  const [sheetId, setSheetId] = useState("");
+  const [sheetName, setSheetName] = useState("");
+  const [csvUrl, setCsvUrl] = useState("");
+  const [rows, setRows] = useState([]);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [totalProfit, setTotalProfit] = useState("");
+  const [search, setSearch] = useState("");
 
-Hey, I'm a Senior Software Engineer at Company. I enjoy working with Next.js and crafting beautiful front-end experiences.
+  const statusMsg = (msg) => {
+    setError("");
+    setStatus(msg);
+  };
+  const errorMsg = (msg) => {
+    setError(msg);
+    setStatus("");
+  };
 
-This portfolio is built with **Next.js** and a library called [Nextra](https://nextra.vercel.app/). It allows you to write Markdown and focus on the _content_ of your portfolio.
+  async function loadData() {
+    setRows([]);
+    setTotalProfit("");
+    statusMsg("Loading…");
 
-[**Deploy your own**](https://vercel.com/new/clone?demo-title=Portfolio+Starter+Kit&demo-description=Easily+create+a+portfolio+with+Next.js+and+Markdown.&demo-url=https%3A%2F%2Fdemo.vercel.blog%2F&demo-image=%2F%2Fimages.ctfassets.net%2Fe5382hct74si%2F2aC4eHLrOKmT4fnLfoNGK2%2F14b1e6bbe598ec023ffe85001d31e634%2FCleanShot_2022-04-11_at_23.12.01.png&project-name=Portfolio+Starter+Kit&repository-name=portfolio-starter-kit&repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fnextjs-portfolio-starter&from=templates&skippable-integrations=1&teamCreateStatus=hidden) in a few minutes.
+    try {
+      let data = [];
+      if (mode === "gsheet") {
+        if (!sheetId) throw new Error("Sheet ID missing.");
+        if (!sheetName) throw new Error("Sheet Name missing.");
+        data = await fetchGoogleSheet(sheetId, sheetName);
+      } else {
+        if (!csvUrl) throw new Error("CSV URL missing.");
+        data = await fetchCSV(csvUrl);
+      }
 
----
+      if (!data || !data.length) throw new Error("No data found.");
+      setRows(data);
+      calculateTotalProfit(data);
+      statusMsg(`Loaded ${data.length - 1} rows.`);
+    } catch (err) {
+      errorMsg(err.message);
+    }
+  }
 
-- Twitter [@yourname](https://twitter.com/yourname)
-- GitHub [@yourname](https://github.com/yourname)
-- Instagram [@yourname](https://instagram.com/yourname)
-- Email your@name.com
+  async function fetchGoogleSheet(id, name) {
+    const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(
+      id
+    )}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(name)}`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (res.status === 403)
+      throw new Error(
+        "Access denied (403). Share → Anyone with the link → Viewer enable karo."
+      );
+    if (res.status === 404)
+      throw new Error("Sheet not found (404). Sheet ID/Name check karo.");
+    const text = await res.text();
+    const jsonStr = text.match(/\{[\s\S]*\}/)?.[0];
+    if (!jsonStr) throw new Error("Parsing failed. Tab name ya sharing off ho sakta hai.");
+    const data = JSON.parse(jsonStr);
+    const headers = data.table.cols.map((c) => c.label || "");
+    const body = data.table.rows.map((r) =>
+      (r.c || []).map((c) => (c && c.v != null ? c.v : ""))
+    );
+    return [headers, ...body];
+  }
+
+  async function fetchCSV(url) {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`CSV fetch failed: ${res.status}`);
+    const text = await res.text();
+    return parseCSVText(text);
+  }
+
+  function parseCSVText(text) {
+    const rows = [];
+    let cur = "",
+      row = [],
+      inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i],
+        next = text[i + 1];
+      if (ch === '"') {
+        if (inQ && next === '"') {
+          cur += '"';
+          i++;
+        } else inQ = !inQ;
+      } else if (ch === "," && !inQ) {
+        row.push(cur);
+        cur = "";
+      } else if ((ch === "\n" || ch === "\r") && !inQ) {
+        if (cur.length || row.length) {
+          row.push(cur);
+          rows.push(row);
+          row = [];
+          cur = "";
+        }
+      } else {
+        cur += ch;
+      }
+    }
+    if (cur.length || row.length) {
+      row.push(cur);
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function calculateTotalProfit(data) {
+    const header = data[0].map((h) => h.toString().toLowerCase());
+    const profitIndex = header.findIndex(
+      (h) => h.includes("profit") || h.includes("p&l")
+    );
+    if (profitIndex === -1) {
+      setTotalProfit("⚠️ 'Profit' column not found.");
+      return;
+    }
+    let total = 0;
+    data.slice(1).forEach((r) => {
+      const val = parseFloat(String(r[profitIndex]).replace(/[^0-9.-]/g, ""));
+      if (!isNaN(val)) total += val;
+    });
+    setTotalProfit(`💰 Total Profit: ₹${total.toFixed(2)}`);
+  }
+
+  const filteredRows = () => {
+    if (!rows.length) return [];
+    if (!search.trim()) return rows.slice(1);
+    const q = search.toLowerCase();
+    return rows.slice(1).filter((r) =>
+      r.some((v) => String(v ?? "").toLowerCase().includes(q))
+    );
+  };
+
+  return (
+    <div style={styles.page}>
+      <div style={styles.card}>
+        <h1 style={{ fontSize: 20 }}>Sheet → HTML Table</h1>
+        <div style={styles.help}>
+          <div>
+            Google Sheets: Share → <b>Anyone with the link → Viewer</b>
+          </div>
+          <div>
+            Excel: Save as <b>CSV</b> and use CSV input (or upload public URL)
+          </div>
+        </div>
+
+        <div style={styles.row}>
+          <div>
+            <label style={styles.pill}>Mode</label>
+            <select
+              value={mode}
+              onChange={(e) => {
+                setMode(e.target.value);
+                setRows([]);
+                setTotalProfit("");
+                statusMsg("");
+              }}
+              style={styles.input}
+            >
+              <option value="gsheet">Google Sheet</option>
+              <option value="csv">CSV</option>
+            </select>
+          </div>
+          <div style={styles.controls}>
+            <input
+              style={styles.input}
+              placeholder="Search rows..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <button
+              style={styles.button}
+              onClick={() => setSearch("")}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+
+        {mode === "gsheet" && (
+          <div style={styles.row}>
+            <input
+              style={styles.input}
+              placeholder="Google Sheet ID"
+              value={sheetId}
+              onChange={(e) => setSheetId(e.target.value)}
+            />
+            <input
+              style={styles.input}
+              placeholder="Sheet Name"
+              value={sheetName}
+              onChange={(e) => setSheetName(e.target.value)}
+            />
+          </div>
+        )}
+
+        {mode === "csv" && (
+          <div style={styles.row}>
+            <input
+              style={styles.input}
+              placeholder="CSV URL"
+              value={csvUrl}
+              onChange={(e) => setCsvUrl(e.target.value)}
+            />
+          </div>
+        )}
+
+        <div style={styles.controls}>
+          <button style={styles.primaryBtn} onClick={loadData}>
+            Load Data
+          </button>
+          {status && <span style={styles.status}>{status}</span>}
+          {error && <span style={styles.error}>{error}</span>}
+        </div>
+
+        {!!rows.length && (
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                {rows[0].map((h, i) => (
+                  <th key={i}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows().map((r, i) => (
+                <tr key={i}>
+                  {r.map((c, j) => (
+                    <td key={j}>{String(c)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {totalProfit && (
+          <div style={{ marginTop: 15, fontWeight: "bold", color: "#00ff9d" }}>
+            {totalProfit}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const styles = {
+  page: { margin: 24, background: "#0b0b0c", color: "#e8e8ea", minHeight: "100vh" },
+  card: {
+    background: "#131317",
+    border: "1px solid #2a2a31",
+    borderRadius: 16,
+    padding: 16,
+    maxWidth: 1100,
+    margin: "0 auto",
+  },
+  help: { color: "#a8a8b3", fontSize: 12, marginTop: 4 },
+  row: { display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr", margin: "12px 0" },
+  controls: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
+  pill: {
+    fontSize: 12,
+    padding: "4px 8px",
+    borderRadius: 999,
+    background: "#1a1f2e",
+    border: "1px solid #2a3550",
+    marginRight: 8,
+  },
+  input: {
+    background: "#0f0f13",
+    color: "#e8e8ea",
+    border: "1px solid #2a2a31",
+    borderRadius: 10,
+    padding: "10px 12px",
+    width: "100%",
+  },
+  button: {
+    background: "#0f0f13",
+    color: "#e8e8ea",
+    border: "1px solid #2a2a31",
+    borderRadius: 10,
+    padding: "10px 12px",
+    cursor: "pointer",
+  },
+  primaryBtn: {
+    background: "#1f6feb",
+    borderColor: "#2b73ff",
+    color: "white",
+    borderRadius: 10,
+    padding: "10px 12px",
+    cursor: "pointer",
+  },
+  status: { color: "#a8ffb1", fontSize: 13 },
+  error: { color: "#ff9aa2", fontSize: 13 },
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+    marginTop: 12,
+    fontSize: 14,
+  },
+};
